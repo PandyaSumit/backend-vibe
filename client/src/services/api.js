@@ -46,6 +46,12 @@ export const endpoints = {
   delete: (id) => request(`/endpoints/${id}`, { method: 'DELETE' }),
 };
 
+// Architecture (AI-powered visual designer)
+export const architecture = {
+  generate: (data) => request('/architecture/generate', { method: 'POST', body: JSON.stringify(data) }),
+  save: (data) => request('/architecture/save', { method: 'POST', body: JSON.stringify(data) }),
+};
+
 // Code Generation
 export const generate = {
   project: (projectId) =>

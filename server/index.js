@@ -7,6 +7,7 @@ const projectRoutes = require('./routes/projects');
 const schemaRoutes = require('./routes/schemas');
 const generateRoutes = require('./routes/generate');
 const endpointRoutes = require('./routes/endpoints');
+const architectureRoutes = require('./routes/architecture');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -18,6 +19,7 @@ app.use('/api/projects', projectRoutes);
 app.use('/api/schemas', schemaRoutes);
 app.use('/api/generate', generateRoutes);
 app.use('/api/endpoints', endpointRoutes);
+app.use('/api/architecture', architectureRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
