@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import ProjectDetail from './pages/ProjectDetail';
 import SchemaEditor from './pages/SchemaEditor';
 import ApiExplorer from './pages/ApiExplorer';
+import EndpointBuilder from './pages/EndpointBuilder';
 import CodeExport from './pages/CodeExport';
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="schema/new" element={<SchemaEditor />} />
         <Route path="schema/:schemaId" element={<SchemaEditor />} />
         <Route path="api" element={<ApiExplorer />} />
+        <Route path="endpoints" element={<EndpointBuilder />} />
         <Route path="export" element={<CodeExport />} />
       </Route>
     </Routes>

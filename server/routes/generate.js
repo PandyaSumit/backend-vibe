@@ -3,6 +3,7 @@ const router = express.Router();
 const archiver = require('archiver');
 const Project = require('../models/Project');
 const SchemaDefinition = require('../models/SchemaDefinition');
+const CustomEndpoint = require('../models/CustomEndpoint');
 const { generateFullProject } = require('../services/codeGenerator');
 
 // Generate full project code (returns JSON with all files)
@@ -12,7 +13,8 @@ router.post('/:projectId', async (req, res, next) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const schemas = await SchemaDefinition.find({ project: project._id });
-    const files = generateFullProject(project, schemas);
+    const customEndpoints = await CustomEndpoint.find({ project: project._id });
+    const files = generateFullProject(project, schemas, customEndpoints);
 
     res.json({ project: project.name, files });
   } catch (err) {
@@ -27,7 +29,8 @@ router.get('/:projectId/download', async (req, res, next) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const schemas = await SchemaDefinition.find({ project: project._id });
-    const files = generateFullProject(project, schemas);
+    const customEndpoints = await CustomEndpoint.find({ project: project._id });
+    const files = generateFullProject(project, schemas, customEndpoints);
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(

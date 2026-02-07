@@ -36,6 +36,16 @@ export const schemas = {
   preview: (id) => request(`/schemas/${id}/preview`),
 };
 
+// Custom Endpoints (AI-powered)
+export const endpoints = {
+  listByProject: (projectId) => request(`/endpoints/project/${projectId}`),
+  get: (id) => request(`/endpoints/${id}`),
+  generate: (data) => request('/endpoints/generate', { method: 'POST', body: JSON.stringify(data) }),
+  save: (data) => request('/endpoints', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id, data) => request(`/endpoints/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id) => request(`/endpoints/${id}`, { method: 'DELETE' }),
+};
+
 // Code Generation
 export const generate = {
   project: (projectId) =>

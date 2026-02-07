@@ -252,7 +252,7 @@ function generateRouteCode(schema, allSchemas) {
 
 // ---------- Full Project Generator ----------
 
-function generateServerEntry(project, schemas) {
+function generateServerEntry(project, schemas, customEndpoints) {
   const routeImports = schemas
     .filter((s) => s.generateCrud)
     .map((s) => {
@@ -269,6 +269,29 @@ function generateServerEntry(project, schemas) {
     })
     .join('\n');
 
+  // Custom endpoint imports and mounts
+  const customImports = (customEndpoints || [])
+    .map((ep) => {
+      const filename = ep.path
+        .replace('/api/custom/', '')
+        .replace(/\//g, '-')
+        .replace(/[^a-z0-9-]/g, '');
+      const varName = filename.replace(/-([a-z])/g, (_, c) => c.toUpperCase()) + 'Route';
+      return `const ${varName} = require('./routes/custom-${filename || 'endpoint'}');`;
+    })
+    .join('\n');
+
+  const customUse = (customEndpoints || [])
+    .map((ep) => {
+      const filename = ep.path
+        .replace('/api/custom/', '')
+        .replace(/\//g, '-')
+        .replace(/[^a-z0-9-]/g, '');
+      const varName = filename.replace(/-([a-z])/g, (_, c) => c.toUpperCase()) + 'Route';
+      return `app.use('${ep.path}', ${varName});`;
+    })
+    .join('\n');
+
   return `require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -281,10 +304,11 @@ const PORT = process.env.PORT || ${project.port || 3000};
 app.use(cors());
 app.use(express.json());
 
-// Routes
+// CRUD Routes
 ${routeImports}
 
 ${routeUse}
+${customImports ? `\n// Custom API Endpoints\n${customImports}\n\n${customUse}` : ''}
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -346,28 +370,165 @@ NODE_ENV=development
 `;
 }
 
-function generateFullProject(project, schemas) {
+// ---------- Custom Endpoint Route Generator ----------
+
+function generateCustomEndpointCode(endpoint, schemas) {
+  const modelName = toModelName(endpoint.sourceCollection);
+  const filters = endpoint.filters || [];
+  const aggs = endpoint.aggregations || [];
+  const isAggregation = aggs.length > 0;
+
+  let code = `const express = require('express');\n`;
+  code += `const router = express.Router();\n`;
+  code += `const ${modelName} = require('../models/${modelName}');\n\n`;
+
+  code += `// ${endpoint.description || endpoint.name}\n`;
+  if (endpoint.sourcePrompt) {
+    code += `// Generated from: "${endpoint.sourcePrompt}"\n`;
+  }
+
+  if (endpoint.safetyNotes && endpoint.safetyNotes.length > 0) {
+    endpoint.safetyNotes.forEach((note) => {
+      code += `// Safety: ${note}\n`;
+    });
+  }
+
+  code += `router.${endpoint.method.toLowerCase()}('/', async (req, res) => {\n`;
+  code += `  try {\n`;
+
+  if (isAggregation) {
+    code += `    const pipeline = [];\n\n`;
+
+    if (filters.length > 0) {
+      code += `    const match = {};\n`;
+      filters.forEach((f) => {
+        const mongoOp = {
+          eq: '$eq', ne: '$ne', gt: '$gt', gte: '$gte',
+          lt: '$lt', lte: '$lte', in: '$in', nin: '$nin',
+          regex: '$regex', exists: '$exists',
+        }[f.operator];
+
+        if (f.valueSource === 'static' && f.staticValue !== undefined && f.staticValue !== null) {
+          code += `    match.${f.field} = { '${mongoOp}': ${JSON.stringify(f.staticValue)} };\n`;
+        } else if (f.operator === 'between') {
+          code += `    if (req.query.${f.field}_from || req.query.${f.field}_to) {\n`;
+          code += `      match.${f.field} = {};\n`;
+          code += `      if (req.query.${f.field}_from) match.${f.field}.$gte = req.query.${f.field}_from;\n`;
+          code += `      if (req.query.${f.field}_to) match.${f.field}.$lte = req.query.${f.field}_to;\n`;
+          code += `    }\n`;
+        } else {
+          code += `    if (req.query.${f.field}) match.${f.field} = { '${mongoOp}': req.query.${f.field} };\n`;
+        }
+      });
+      code += `    if (Object.keys(match).length > 0) pipeline.push({ $match: match });\n\n`;
+    }
+
+    const groupId = endpoint.groupBy ? `'$${endpoint.groupBy}'` : 'null';
+    const groupAccumulators = aggs
+      .map((a) => {
+        const op = { count: '$sum', sum: '$sum', avg: '$avg', min: '$min', max: '$max' }[a.operation];
+        const val = a.operation === 'count' ? '1' : `'$${a.field}'`;
+        return `        ${a.alias}: { '${op}': ${val} }`;
+      })
+      .join(',\n');
+
+    code += `    pipeline.push({\n`;
+    code += `      $group: {\n`;
+    code += `        _id: ${groupId},\n`;
+    code += `${groupAccumulators}\n`;
+    code += `      }\n`;
+    code += `    });\n\n`;
+
+    if (endpoint.sort?.field) {
+      const sortField = endpoint.sort.field === endpoint.groupBy ? '_id' : endpoint.sort.field;
+      code += `    pipeline.push({ $sort: { '${sortField}': ${endpoint.sort.order === 'asc' ? 1 : -1} } });\n\n`;
+    }
+
+    code += `    const result = await ${modelName}.aggregate(pipeline);\n`;
+    code += `    res.json({ data: result });\n`;
+  } else {
+    code += `    const filter = {};\n`;
+    filters.forEach((f) => {
+      if (f.valueSource === 'static' && f.staticValue !== undefined && f.staticValue !== null) {
+        if (f.operator === 'eq') {
+          code += `    filter.${f.field} = ${JSON.stringify(f.staticValue)};\n`;
+        } else {
+          const mongoOp = { ne: '$ne', gt: '$gt', gte: '$gte', lt: '$lt', lte: '$lte' }[f.operator];
+          code += `    filter.${f.field} = { '${mongoOp}': ${JSON.stringify(f.staticValue)} };\n`;
+        }
+      } else if (f.operator === 'between') {
+        code += `    if (req.query.${f.field}_from || req.query.${f.field}_to) {\n`;
+        code += `      filter.${f.field} = {};\n`;
+        code += `      if (req.query.${f.field}_from) filter.${f.field}.$gte = req.query.${f.field}_from;\n`;
+        code += `      if (req.query.${f.field}_to) filter.${f.field}.$lte = req.query.${f.field}_to;\n`;
+        code += `    }\n`;
+      } else if (f.operator === 'regex') {
+        code += `    if (req.query.${f.field}) filter.${f.field} = new RegExp(req.query.${f.field}, 'i');\n`;
+      } else if (f.operator === 'eq') {
+        code += `    if (req.query.${f.field}) filter.${f.field} = req.query.${f.field};\n`;
+      } else {
+        const mongoOp = { ne: '$ne', gt: '$gt', gte: '$gte', lt: '$lt', lte: '$lte', in: '$in', nin: '$nin' }[f.operator];
+        code += `    if (req.query.${f.field}) filter.${f.field} = { '${mongoOp}': req.query.${f.field} };\n`;
+      }
+    });
+
+    const outputFields = endpoint.outputFields || [];
+    const projection = outputFields.length > 0 ? outputFields.join(' ') : '';
+
+    if (endpoint.pagination?.enabled !== false) {
+      code += `\n    const page = parseInt(req.query.page) || 1;\n`;
+      code += `    const limit = Math.min(parseInt(req.query.limit) || ${endpoint.pagination?.defaultLimit || 20}, ${endpoint.pagination?.maxLimit || 100});\n`;
+      code += `    const skip = (page - 1) * limit;\n`;
+
+      const sortStr = endpoint.sort?.field
+        ? `'${endpoint.sort.order === 'asc' ? '' : '-'}${endpoint.sort.field}'`
+        : "'-createdAt'";
+
+      code += `\n    const [items, total] = await Promise.all([\n`;
+      code += `      ${modelName}.find(filter)${projection ? `.select('${projection}')` : ''}.sort(${sortStr}).skip(skip).limit(limit),\n`;
+      code += `      ${modelName}.countDocuments(filter),\n`;
+      code += `    ]);\n\n`;
+      code += `    res.json({\n`;
+      code += `      data: items,\n`;
+      code += `      pagination: { page, limit, total, pages: Math.ceil(total / limit) },\n`;
+      code += `    });\n`;
+    } else {
+      const sortStr = endpoint.sort?.field
+        ? `'${endpoint.sort.order === 'asc' ? '' : '-'}${endpoint.sort.field}'`
+        : "'-createdAt'";
+
+      code += `\n    const items = await ${modelName}.find(filter)${projection ? `.select('${projection}')` : ''}.sort(${sortStr}).limit(${endpoint.pagination?.maxLimit || 100});\n`;
+      code += `    res.json({ data: items });\n`;
+    }
+  }
+
+  code += `  } catch (err) {\n`;
+  code += `    res.status(500).json({ error: err.message });\n`;
+  code += `  }\n`;
+  code += `});\n\n`;
+  code += `module.exports = router;\n`;
+
+  return code;
+}
+
+function generateFullProject(project, schemas, customEndpoints) {
   const files = [];
 
-  // package.json
   files.push({
     path: 'package.json',
     content: generateProjectPackageJson(project),
   });
 
-  // .env.example
   files.push({
     path: '.env.example',
     content: generateEnvExample(project),
   });
 
-  // server.js
   files.push({
     path: 'server.js',
-    content: generateServerEntry(project, schemas),
+    content: generateServerEntry(project, schemas, customEndpoints),
   });
 
-  // Models
   schemas.forEach((schema) => {
     files.push({
       path: `models/${toModelName(schema.name)}.js`,
@@ -375,7 +536,6 @@ function generateFullProject(project, schemas) {
     });
   });
 
-  // Routes
   schemas
     .filter((s) => s.generateCrud)
     .forEach((schema) => {
@@ -385,12 +545,25 @@ function generateFullProject(project, schemas) {
       });
     });
 
+  // Custom endpoint routes
+  (customEndpoints || []).forEach((ep) => {
+    const filename = ep.path
+      .replace('/api/custom/', '')
+      .replace(/\//g, '-')
+      .replace(/[^a-z0-9-]/g, '');
+    files.push({
+      path: `routes/custom-${filename || 'endpoint'}.js`,
+      content: generateCustomEndpointCode(ep, schemas),
+    });
+  });
+
   return files;
 }
 
 module.exports = {
   generateModelCode,
   generateRouteCode,
+  generateCustomEndpointCode,
   generateFullProject,
   generateServerEntry,
   generateProjectPackageJson,
