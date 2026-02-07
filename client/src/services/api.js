@@ -58,3 +58,19 @@ export const generate = {
     request(`/generate/${projectId}`, { method: 'POST' }),
   downloadUrl: (projectId) => `${BASE}/generate/${projectId}/download`,
 };
+
+// Project Settings (encrypted API keys)
+export const settings = {
+  get: (projectId) => request(`/settings/${projectId}`),
+  update: (projectId, data) =>
+    request(`/settings/${projectId}`, { method: 'PUT', body: JSON.stringify(data) }),
+};
+
+// Sandbox (live API testing)
+export const sandbox = {
+  execute: (projectId, data) =>
+    request(`/sandbox/${projectId}/execute`, { method: 'POST', body: JSON.stringify(data) }),
+  reset: (projectId) =>
+    request(`/sandbox/${projectId}/reset`, { method: 'DELETE' }),
+  collections: (projectId) => request(`/sandbox/${projectId}/collections`),
+};

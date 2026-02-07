@@ -3,20 +3,30 @@ const router = express.Router();
 const CustomEndpoint = require('../models/CustomEndpoint');
 const SchemaDefinition = require('../models/SchemaDefinition');
 const Project = require('../models/Project');
+const ProjectSettings = require('../models/ProjectSettings');
 const { generateEndpointDefinition, validateEndpoint } = require('../services/groqService');
+const { decrypt } = require('../services/encryption');
+
+async function resolveGroqKey(projectId) {
+  const settings = await ProjectSettings.findOne({ project: projectId });
+  if (settings && settings.groqApiKeyEncrypted) {
+    return decrypt(settings.groqApiKeyEncrypted);
+  }
+  return process.env.GROQ_API_KEY || '';
+}
 
 // Generate endpoint definition from natural language using Groq AI
 router.post('/generate', async (req, res, next) => {
   try {
-    const { projectId, prompt, groqApiKey } = req.body;
+    const { projectId, prompt } = req.body;
 
     if (!projectId) return res.status(400).json({ error: 'projectId is required' });
     if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
-    const apiKey = groqApiKey || process.env.GROQ_API_KEY;
+    const apiKey = await resolveGroqKey(projectId);
     if (!apiKey) {
       return res.status(400).json({
-        error: 'Groq API key is required. Set GROQ_API_KEY in environment or pass groqApiKey in request body.',
+        error: 'Groq API key not configured. Go to Settings to add your key.',
       });
     }
 

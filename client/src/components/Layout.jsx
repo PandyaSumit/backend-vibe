@@ -5,7 +5,6 @@ import {
   Code2,
   Zap,
   BrainCircuit,
-  Layers,
   ArrowLeft,
 } from 'lucide-react';
 
@@ -15,7 +14,6 @@ const NAV_ITEMS = [
 
 const PROJECT_NAV = [
   { path: '', label: 'Schemas', icon: Database },
-  { path: '/architecture', label: 'Architecture', icon: Layers },
   { path: '/api', label: 'API Explorer', icon: Zap },
   { path: '/endpoints', label: 'AI Endpoints', icon: BrainCircuit },
   { path: '/export', label: 'Export Code', icon: Code2 },

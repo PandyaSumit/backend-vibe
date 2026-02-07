@@ -14,9 +14,12 @@ import {
   Filter,
   BarChart3,
   Loader2,
+  Settings,
 } from 'lucide-react';
 import { endpoints as endpointsApi, schemas as schemasApi } from '../services/api';
 import CodePreview from '../components/CodePreview';
+import SettingsDrawer from '../components/SettingsDrawer';
+import useSettings from '../hooks/useSettings';
 
 const METHOD_COLORS = {
   GET: 'bg-green-900/30 text-green-400 border-green-800',
@@ -34,7 +37,6 @@ function EndpointDefinitionView({ definition, warnings }) {
 
   return (
     <div className="border border-zinc-800 rounded-lg overflow-hidden">
-      {/* Header */}
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-3 px-4 py-3 bg-zinc-900/50 hover:bg-zinc-900 transition-colors text-left"
@@ -49,7 +51,6 @@ function EndpointDefinitionView({ definition, warnings }) {
 
       {expanded && (
         <div className="p-4 space-y-4">
-          {/* Warnings */}
           {warnings && warnings.length > 0 && (
             <div className="p-3 bg-yellow-900/20 border border-yellow-800/50 rounded-lg">
               <div className="flex items-center gap-2 text-yellow-400 text-xs font-medium mb-1.5">
@@ -64,7 +65,6 @@ function EndpointDefinitionView({ definition, warnings }) {
             </div>
           )}
 
-          {/* Source & Output */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1.5">Source Collection</div>
@@ -84,7 +84,6 @@ function EndpointDefinitionView({ definition, warnings }) {
             </div>
           </div>
 
-          {/* Filters */}
           {(ep.filters || []).length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 uppercase tracking-wide mb-1.5">
@@ -105,7 +104,6 @@ function EndpointDefinitionView({ definition, warnings }) {
             </div>
           )}
 
-          {/* Aggregations */}
           {(ep.aggregations || []).length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 uppercase tracking-wide mb-1.5">
@@ -130,7 +128,6 @@ function EndpointDefinitionView({ definition, warnings }) {
             </div>
           )}
 
-          {/* Sort & Pagination */}
           <div className="grid grid-cols-3 gap-4">
             {ep.sort?.field && (
               <div>
@@ -159,7 +156,6 @@ function EndpointDefinitionView({ definition, warnings }) {
             </div>
           </div>
 
-          {/* Auth */}
           {ep.auth?.required && (
             <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/50 rounded">
               <Shield size={12} className="text-amber-400" />
@@ -172,7 +168,6 @@ function EndpointDefinitionView({ definition, warnings }) {
             </div>
           )}
 
-          {/* Safety Notes */}
           {(ep.safetyNotes || []).length > 0 && (
             <div>
               <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-1.5">Safety & Performance Notes</div>
@@ -194,9 +189,10 @@ function EndpointDefinitionView({ definition, warnings }) {
 
 export default function EndpointBuilder() {
   const { projectId } = useParams();
+  const settings = useSettings(projectId);
+
   const [prompt, setPrompt] = useState('');
-  const [groqApiKey, setGroqApiKey] = useState(() => localStorage.getItem('groq_api_key') || '');
-  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -224,17 +220,13 @@ export default function EndpointBuilder() {
     }
   }
 
-  function handleKeyChange(key) {
-    setGroqApiKey(key);
-    localStorage.setItem('groq_api_key', key);
-  }
-
   async function handleGenerate(e) {
     e.preventDefault();
     if (!prompt.trim()) return;
-    if (!groqApiKey.trim()) {
-      setShowKeyInput(true);
-      setError('Enter your Groq API key first');
+
+    if (!settings.hasKey) {
+      setShowSettings(true);
+      setError('Configure your Groq API key in Settings first');
       return;
     }
     if (schemaList.length === 0) {
@@ -250,7 +242,6 @@ export default function EndpointBuilder() {
       const data = await endpointsApi.generate({
         projectId,
         prompt: prompt.trim(),
-        groqApiKey: groqApiKey.trim(),
       });
       setResult(data);
     } catch (err) {
@@ -295,8 +286,6 @@ export default function EndpointBuilder() {
     'Get all orders from the last 30 days sorted by total amount descending',
     'Count users grouped by their role',
     'Find products with price between $10 and $100, return name and price only',
-    'Get average order value per customer',
-    'List active users who signed up this month with pagination',
   ];
 
   if (loading) return <div className="p-8 text-zinc-500 text-sm">Loading...</div>;
@@ -304,10 +293,19 @@ export default function EndpointBuilder() {
   return (
     <div className="p-8 max-w-4xl">
       <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
-          <BrainCircuit size={24} className="text-purple-400" />
-          AI Endpoint Builder
-        </h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold text-zinc-100 flex items-center gap-2">
+            <BrainCircuit size={24} className="text-purple-400" />
+            AI Endpoint Builder
+          </h1>
+          <button
+            onClick={() => setShowSettings(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-300 border border-zinc-800 hover:border-zinc-700 rounded-lg transition-colors"
+          >
+            <Settings size={12} />
+            {settings.hasKey ? 'Key configured' : 'Set API Key'}
+          </button>
+        </div>
         <p className="text-sm text-zinc-500 mt-1">
           Describe an API endpoint in plain English. Groq AI translates it into a structured,
           production-safe endpoint definition using your schemas.
@@ -320,31 +318,6 @@ export default function EndpointBuilder() {
           <button onClick={() => setError('')} className="text-red-400 hover:text-red-200 ml-4">x</button>
         </div>
       )}
-
-      {/* Groq API Key */}
-      <div className="mb-4">
-        <button
-          onClick={() => setShowKeyInput(!showKeyInput)}
-          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-        >
-          {showKeyInput ? 'Hide' : 'Configure'} Groq API Key
-          {groqApiKey ? ' (set)' : ' (required)'}
-        </button>
-        {showKeyInput && (
-          <div className="mt-2">
-            <input
-              type="password"
-              value={groqApiKey}
-              onChange={(e) => handleKeyChange(e.target.value)}
-              placeholder="gsk_..."
-              className="w-full px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-100 font-mono focus:border-purple-500 focus:outline-none"
-            />
-            <p className="text-[10px] text-zinc-600 mt-1">
-              Stored in browser localStorage. Get a key at console.groq.com
-            </p>
-          </div>
-        )}
-      </div>
 
       {/* Schema context indicator */}
       <div className="mb-4 flex gap-2 flex-wrap">
@@ -388,7 +361,7 @@ export default function EndpointBuilder() {
           </button>
         </div>
         <div className="flex flex-wrap gap-1.5 mt-2">
-          {EXAMPLE_PROMPTS.slice(0, 3).map((ex) => (
+          {EXAMPLE_PROMPTS.map((ex) => (
             <button
               key={ex}
               type="button"
@@ -466,6 +439,9 @@ export default function EndpointBuilder() {
           </div>
         )}
       </div>
+
+      {/* Settings Drawer */}
+      <SettingsDrawer open={showSettings} onClose={() => setShowSettings(false)} settings={settings} />
     </div>
   );
 }
