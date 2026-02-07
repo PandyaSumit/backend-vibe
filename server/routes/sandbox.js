@@ -61,16 +61,13 @@ function buildMongooseSchema(schemaDef) {
 }
 
 function getSandboxModel(schemaDef, projectId) {
-  // Use sandboxed collection name to isolate test data
   const collectionName = `sbx_${projectId.toString().slice(-8)}_${schemaDef.name.toLowerCase()}`;
   const cacheKey = `${projectId}_${schemaDef.name}`;
 
-  // Check if model exists and schema hasn't changed
   if (modelCache.has(cacheKey)) {
     return modelCache.get(cacheKey);
   }
 
-  // Clean up any existing model with this name
   const modelName = `Sandbox_${cacheKey}`;
   if (mongoose.models[modelName]) {
     delete mongoose.models[modelName];
@@ -83,16 +80,38 @@ function getSandboxModel(schemaDef, projectId) {
   return model;
 }
 
-// Execute a sandbox operation
+// List available collections/schemas for a project
+router.get('/:projectId/collections', async (req, res, next) => {
+  try {
+    const schemas = await SchemaDefinition.find({ project: req.params.projectId });
+    const collections = schemas.map((s) => ({
+      name: s.name,
+      fields: (s.fields || []).map((f) => ({
+        name: f.name,
+        type: f.fieldType,
+        required: f.required || false,
+        ref: f.ref || null,
+      })),
+      generateCrud: s.generateCrud,
+      endpoints: s.endpoints || {},
+    }));
+    res.json(collections);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Execute a sandbox operation — returns full HTTP-like response metadata
 router.post('/:projectId/execute', async (req, res, next) => {
   try {
-    const { collection, method, id, body, query } = req.body;
+    const { collection, method, path: reqPath, id, body, query, headers: reqHeaders } = req.body;
 
     if (!collection) return res.status(400).json({ error: 'collection is required' });
     if (!method) return res.status(400).json({ error: 'method is required' });
 
-    const allowedMethods = ['GET', 'POST', 'PUT', 'DELETE'];
-    if (!allowedMethods.includes(method.toUpperCase())) {
+    const allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
+    const httpMethod = method.toUpperCase();
+    if (!allowedMethods.includes(httpMethod)) {
       return res.status(400).json({ error: `Invalid method. Allowed: ${allowedMethods.join(', ')}` });
     }
 
@@ -108,16 +127,32 @@ router.post('/:projectId/execute', async (req, res, next) => {
     }
 
     const Model = getSandboxModel(schemaDef, req.params.projectId);
-    const httpMethod = method.toUpperCase();
+    const startTime = process.hrtime.bigint();
 
     let result;
-    const startTime = Date.now();
+    let statusCode;
+    let responseHeaders = {
+      'content-type': 'application/json',
+      'x-powered-by': 'SchemaForge Sandbox',
+      'x-sandbox': 'true',
+    };
 
     switch (httpMethod) {
       case 'GET': {
         if (id) {
           result = await Model.findById(id).lean();
-          if (!result) return res.status(404).json({ error: 'Document not found' });
+          if (!result) {
+            const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
+            return res.json({
+              status: 404,
+              statusText: 'Not Found',
+              headers: responseHeaders,
+              body: { error: 'Document not found' },
+              duration: `${duration.toFixed(1)}ms`,
+              size: 0,
+            });
+          }
+          statusCode = 200;
         } else {
           const filter = {};
           const queryParams = query || {};
@@ -126,7 +161,6 @@ router.post('/:projectId/execute', async (req, res, next) => {
           const skip = (page - 1) * limit;
           const sort = queryParams.sort || '-createdAt';
 
-          // Build filters from query params (only for fields that exist)
           const fieldNames = (schemaDef.fields || []).map((f) => f.name);
           Object.entries(queryParams).forEach(([key, value]) => {
             if (fieldNames.includes(key) && value !== undefined && value !== '') {
@@ -148,72 +182,145 @@ router.post('/:projectId/execute', async (req, res, next) => {
             data: items,
             pagination: { page, limit, total, pages: Math.ceil(total / limit) },
           };
+          statusCode = 200;
+          responseHeaders['x-total-count'] = String(total);
+          responseHeaders['x-page'] = String(page);
         }
         break;
       }
 
       case 'POST': {
         if (!body || typeof body !== 'object') {
-          return res.status(400).json({ error: 'Request body is required for POST' });
+          const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
+          return res.json({
+            status: 400,
+            statusText: 'Bad Request',
+            headers: responseHeaders,
+            body: { error: 'Request body is required for POST' },
+            duration: `${duration.toFixed(1)}ms`,
+            size: 0,
+          });
         }
-        // Sanitize: only allow fields defined in schema
         const fieldNames = (schemaDef.fields || []).map((f) => f.name);
         const sanitized = {};
         Object.entries(body).forEach(([key, value]) => {
-          if (fieldNames.includes(key)) {
-            sanitized[key] = value;
-          }
+          if (fieldNames.includes(key)) sanitized[key] = value;
         });
         result = await Model.create(sanitized);
         result = result.toObject();
+        statusCode = 201;
         break;
       }
 
-      case 'PUT': {
-        if (!id) return res.status(400).json({ error: 'id is required for PUT' });
+      case 'PUT':
+      case 'PATCH': {
+        if (!id) {
+          const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
+          return res.json({
+            status: 400,
+            statusText: 'Bad Request',
+            headers: responseHeaders,
+            body: { error: 'id is required for PUT/PATCH' },
+            duration: `${duration.toFixed(1)}ms`,
+            size: 0,
+          });
+        }
         if (!body || typeof body !== 'object') {
-          return res.status(400).json({ error: 'Request body is required for PUT' });
+          const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
+          return res.json({
+            status: 400,
+            statusText: 'Bad Request',
+            headers: responseHeaders,
+            body: { error: 'Request body is required for PUT/PATCH' },
+            duration: `${duration.toFixed(1)}ms`,
+            size: 0,
+          });
         }
         const fieldNames = (schemaDef.fields || []).map((f) => f.name);
         const sanitized = {};
         Object.entries(body).forEach(([key, value]) => {
-          if (fieldNames.includes(key)) {
-            sanitized[key] = value;
-          }
+          if (fieldNames.includes(key)) sanitized[key] = value;
         });
         result = await Model.findByIdAndUpdate(id, sanitized, {
           new: true,
           runValidators: true,
         }).lean();
-        if (!result) return res.status(404).json({ error: 'Document not found' });
+        if (!result) {
+          const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
+          return res.json({
+            status: 404,
+            statusText: 'Not Found',
+            headers: responseHeaders,
+            body: { error: 'Document not found' },
+            duration: `${duration.toFixed(1)}ms`,
+            size: 0,
+          });
+        }
+        statusCode = 200;
         break;
       }
 
       case 'DELETE': {
-        if (!id) return res.status(400).json({ error: 'id is required for DELETE' });
+        if (!id) {
+          const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
+          return res.json({
+            status: 400,
+            statusText: 'Bad Request',
+            headers: responseHeaders,
+            body: { error: 'id is required for DELETE' },
+            duration: `${duration.toFixed(1)}ms`,
+            size: 0,
+          });
+        }
         result = await Model.findByIdAndDelete(id).lean();
-        if (!result) return res.status(404).json({ error: 'Document not found' });
-        result = { message: 'Deleted', deleted: result };
+        if (!result) {
+          const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
+          return res.json({
+            status: 404,
+            statusText: 'Not Found',
+            headers: responseHeaders,
+            body: { error: 'Document not found' },
+            duration: `${duration.toFixed(1)}ms`,
+            size: 0,
+          });
+        }
+        result = { message: 'Deleted successfully', deleted: result };
+        statusCode = 200;
         break;
       }
     }
 
-    const duration = Date.now() - startTime;
+    const duration = Number(process.hrtime.bigint() - startTime) / 1e6;
+    const responseBody = JSON.stringify(result);
 
     res.json({
-      success: true,
-      method: httpMethod,
-      collection,
-      duration: `${duration}ms`,
-      statusCode: httpMethod === 'POST' ? 201 : 200,
-      result,
+      status: statusCode,
+      statusText: statusCode === 200 ? 'OK' : statusCode === 201 ? 'Created' : 'Unknown',
+      headers: responseHeaders,
+      body: result,
+      duration: `${duration.toFixed(1)}ms`,
+      size: Buffer.byteLength(responseBody, 'utf8'),
     });
   } catch (err) {
     if (err.name === 'ValidationError') {
-      return res.status(400).json({ error: err.message, type: 'ValidationError' });
+      return res.json({
+        status: 400,
+        statusText: 'Validation Error',
+        headers: { 'content-type': 'application/json' },
+        body: { error: err.message, type: 'ValidationError' },
+        duration: '0ms',
+        size: 0,
+      });
     }
     if (err.name === 'CastError') {
-      return res.status(400).json({ error: 'Invalid ID format', type: 'CastError' });
+      return res.json({
+        status: 400,
+        statusText: 'Bad Request',
+        headers: { 'content-type': 'application/json' },
+        body: { error: 'Invalid ID format', type: 'CastError' },
+        duration: '0ms',
+        size: 0,
+      });
     }
     next(err);
   }
@@ -239,7 +346,6 @@ router.delete('/:projectId/reset', async (req, res, next) => {
       }
     }
 
-    // Clear model cache for this project
     for (const key of modelCache.keys()) {
       if (key.startsWith(req.params.projectId.toString())) {
         const modelName = `Sandbox_${key}`;
